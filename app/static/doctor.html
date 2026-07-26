@@ -18,8 +18,9 @@
   select { font:inherit; font-size:.9rem; padding:5px 9px; border:1px solid var(--line);
            border-radius:7px; background:#fff; color:var(--ink); cursor:pointer; }
   select:focus { outline:2px solid var(--accent); outline-offset:1px; }
-  .caveat { color:var(--amber); font-size:.78rem; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(370px,1fr)); gap:14px; }
+  .caveat { color:var(--amber); font-size:.78rem; max-width:40ch; text-align:right; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(370px,1fr)); gap:14px;
+          align-items:start; }
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px;
           box-shadow:0 1px 3px rgba(0,0,0,.05); }
   .card.urgent { border:2px solid var(--red); background:#fff8f7; }
@@ -29,8 +30,10 @@
             font-weight:700; letter-spacing:.06em; background:var(--ink); color:#fff;
             padding:3px 10px; border-radius:6px; }
   .card.urgent .ticket { background:var(--red); }
+  /* Uppercasing is presentation, not content — the label source stays sentence case so it
+     survives translation, and text-transform is a no-op on Indic scripts anyway. */
   .badge { display:inline-block; padding:2px 9px; border-radius:99px; font-size:.72rem;
-           font-weight:700; letter-spacing:.03em; }
+           font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
   .b-red { background:var(--red); color:#fff; } .b-ok { background:#e4f2ec; color:var(--accent); }
   .b-live { background:#fff3cd; color:var(--amber); }
   .row { display:flex; gap:8px; padding:5px 0; border-bottom:1px dashed var(--line); font-size:.92rem; }
@@ -42,8 +45,10 @@
   .c-hi { background:#e4f2ec; color:var(--accent); } .c-lo { background:#fdecea; color:var(--red); }
   .c-mid { background:#fff3cd; color:var(--amber); }
   s { color:var(--muted); }
-  /* Translated text carries a hint that the English original is one hover away. */
-  .tr { border-bottom:1px dotted #b9c7cd; cursor:help; }
+  /* Translated text is marked, faintly but always: on a clinical screen the reader should
+     be able to tell machine output from the recorded note without hunting for it. */
+  .tr { border-bottom:1px dotted #cbd6db; cursor:help; }
+  .tr:hover { border-bottom-color:var(--accent); }
   .quote { background:#f6f9fa; border-left:3px solid var(--accent); padding:7px 10px; margin:5px 0;
            font-size:.88rem; cursor:pointer; border-radius:0 6px 6px 0; }
   .quote:hover { background:#eaf3f0; }
@@ -101,7 +106,7 @@ function card(s){
   const quotes=(s.turns||[]).map(t=>
     `<div class="quote" onclick="new Audio('/audio/'+'${t.audio}').play()">"${tv(t.english)}"</div>`).join('');
   const badge = urgent ? `<span class="badge b-red">⚠ ${esc(L('red_flag_badge'))}</span>`
-    : s.status==='booked' ? `<span class="badge b-ok">${esc(L('booked_badge'))} ${esc(s.booking?.slot||'')}</span>`
+    : s.status==='booked' ? `<span class="badge b-ok">${esc(L('booked_badge'))} · ${esc(s.booking?.slot||'')}</span>`
     : `<span class="badge b-live">● ${esc(L('in_progress_badge'))}</span>`;
   const bookedWith = s.booking
     ? `${esc(s.booking.doctor)} · ${tv(s.booking.specialty)}` : '';

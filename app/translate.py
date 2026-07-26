@@ -27,10 +27,16 @@ SOURCE = "en-IN"
 # instead the queue fills in over the next few 2-second refreshes.
 MAX_NEW_PER_REQUEST = 32
 
+# A string the API keeps rejecting would otherwise be retried on every 2-second refresh
+# for as long as the card is on screen. After this many tries it is cached as its own
+# English, which shows the original and stops the asking.
+MAX_FAILURES = 3
+
 _pool = ThreadPoolExecutor(max_workers=4)
 _lock = threading.Lock()
 _cache: dict[str, dict[str, str]] = {}          # lang -> {english: translated}
 _inflight: set[tuple[str, str]] = set()         # (lang, english) currently being fetched
+_failures: dict[tuple[str, str], int] = {}      # (lang, english) -> consecutive failures
 
 
 def _cache_file(lang: str) -> Path:
@@ -58,15 +64,22 @@ def _store(lang: str, text: str, translated: str) -> None:
 def _fetch(lang: str, text: str) -> None:
     try:
         _store(lang, text, sv.translate(text, lang, source=SOURCE))
+        with _lock:
+            _failures.pop((lang, text), None)
     except Exception:
-        pass  # leave it uncached; a later refresh retries it
+        # Rate limits are the common case here and a later refresh retries them, so a
+        # failure is not cached — until the same string has failed MAX_FAILURES times.
+        with _lock:
+            n = _failures[(lang, text)] = _failures.get((lang, text), 0) + 1
+        if n >= MAX_FAILURES:
+            _store(lang, text, text)
     finally:
         with _lock:
             _inflight.discard((lang, text))
 
 
 def translatable(text) -> bool:
-    """Worth an API call? Skip blanks and bare numbers/codes ('T-004', '1:20', '38')."""
+    """Worth an API call? Skip blanks, single characters, and letterless values ('12:40')."""
     text = str(text or "").strip()
     return bool(text) and any(c.isalpha() for c in text) and len(text) > 1
 

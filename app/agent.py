@@ -74,6 +74,20 @@ def next_ticket() -> str:
     return f"T-{n:03d}"
 
 
+def assign_ticket(sid: str) -> str:
+    """Ticket for an existing session, minted on first ask.
+
+    Only sessions recorded before ticketing existed reach this. It takes the session lock
+    because a background structuring call may be writing the same file right now.
+    """
+    with _locks.setdefault(sid, threading.Lock()):
+        state = load(sid)
+        if not state.get("ticket"):
+            state["ticket"] = next_ticket()
+            save(state)
+        return state["ticket"]
+
+
 def new_session(phone: str | None = None, language: str = L.DEFAULT) -> dict:
     sid = uuid.uuid4().hex[:8]
     state = {

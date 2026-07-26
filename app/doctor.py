@@ -15,29 +15,32 @@ from . import agent, translate
 from .languages import DEFAULT, SUPPORTED
 
 # Fixed screen text, in English, translated through the same cache as the notes.
+# Written as plain prose, not UI shorthand: Mayura renders "RED FLAG — SEE NOW" into Hindi
+# as "red light — look" and "walk-in" as "came". Idiom and telegraphic caps do not survive
+# translation, so the source strings say what they mean and the badge look is CSS.
 LABELS = {
-    "title": "Intake queue",
+    "title": "Patient intake queue",
     "tagline": "Notes assemble while the patient is still speaking · auto-refresh 2s",
     "language": "Reading language",
-    "caveat": "Machine-translated for reading · hover any line for the English original",
-    "translating": "translating",
-    "intakes_today": "intakes today",
+    "caveat": "Machine-translated for reading. Hover any line to see the original English.",
+    "translating": "translation in progress",
+    "intakes_today": "patients today",
     "empty": "No intakes yet.",
-    "ticket": "Ticket",
-    "red_flag_badge": "RED FLAG — SEE NOW",
-    "booked_badge": "BOOKED",
-    "in_progress_badge": "INTAKE IN PROGRESS",
-    "walk_in": "walk-in",
-    "listening": "…listening",
-    "red_flags": "Red flags",
+    "ticket": "Ticket number",
+    "red_flag_badge": "Urgent — see this patient now",
+    "booked_badge": "Appointment booked",
+    "in_progress_badge": "Patient is still answering",
+    "walk_in": "No phone number",
+    "listening": "Still listening",
+    "red_flags": "Emergency signs",
     "complaint": "Complaint",
     "duration": "Duration",
     "severity": "Severity",
     "symptoms": "Symptoms",
     "medications": "Medications",
     "booked_with": "Booked with",
-    "own_words": "Patient's own words (click to play)",
-    "consider": "Areas to consider · clinician only",
+    "own_words": "Patient's own words — tap to hear the recording",
+    "consider": "Areas a clinician may want to explore. This is not a diagnosis.",
 }
 
 
@@ -59,8 +62,7 @@ def _backfill_tickets(sessions: list[dict]) -> None:
     """Give a number to sessions recorded before ticketing existed, in arrival order."""
     for s in sessions:
         if not s.get("ticket"):
-            s["ticket"] = agent.next_ticket()
-            agent.save(s)
+            s["ticket"] = agent.assign_ticket(s["id"])
 
 
 def _free_text(s: dict) -> list[str]:

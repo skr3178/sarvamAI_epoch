@@ -2,7 +2,6 @@
 
 Run: uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
-import json
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form
@@ -64,6 +63,12 @@ def audio_file(fname: str):
 
 
 @app.get("/")
+def landing_page():
+    """Fork in the corridor: patients one way, staff the other."""
+    return FileResponse(STATIC / "landing.html")
+
+
+@app.get("/patient")
 def patient_page():
     return FileResponse(STATIC / "patient.html")
 

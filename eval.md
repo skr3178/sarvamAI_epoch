@@ -1,3 +1,5 @@
+Voice_GYM
+
 This is the hybrid I flagged in idea.md, and it's a rich space — evaluating a multi-turn voice agent is genuinely harder than evaluating a transcriber, because the thing being scored is a trajectory, not an output. Here are the approaches, ordered roughly from cheapest to most ambitious:
 
 1. Entity-fidelity scoring (card #81's insight, applied to your note)
