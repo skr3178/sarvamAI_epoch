@@ -20,7 +20,8 @@ def api_key() -> str:
 
 
 def _mime(path: str) -> str:
-    return {"wav": "audio/wav", "webm": "audio/webm", "mp3": "audio/mpeg", "ogg": "audio/ogg"}.get(
+    return {"wav": "audio/wav", "webm": "audio/webm", "mp3": "audio/mpeg", "ogg": "audio/ogg",
+            "mp4": "audio/mp4", "m4a": "audio/mp4", "aac": "audio/aac"}.get(
         Path(path).suffix.lstrip(".").lower(), "audio/wav")
 
 

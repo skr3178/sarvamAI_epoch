@@ -1,3 +1,95 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Doctor Screen</title></head>
-<body><p>Doctor screen — built in M3.</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinic — Intake Notes</title>
+<style>
+  :root { --ink:#1a2b33; --muted:#6b7f88; --line:#dde5e8; --accent:#0e7a5f; --red:#c0392b; --amber:#b8860b; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:ui-sans-serif, system-ui, sans-serif; background:#eef2f3; color:var(--ink);
+         padding:20px; line-height:1.5; }
+  header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; }
+  h1 { font-size:1.15rem; } .sub { color:var(--muted); font-size:.85rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(370px,1fr)); gap:14px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px;
+          box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  .card.urgent { border:2px solid var(--red); background:#fff8f7; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:99px; font-size:.72rem;
+           font-weight:700; letter-spacing:.03em; }
+  .b-red { background:var(--red); color:#fff; } .b-ok { background:#e4f2ec; color:var(--accent); }
+  .b-live { background:#fff3cd; color:var(--amber); }
+  .row { display:flex; gap:8px; padding:5px 0; border-bottom:1px dashed var(--line); font-size:.92rem; }
+  .row:last-child { border:0; }
+  .k { color:var(--muted); min-width:110px; font-size:.8rem; text-transform:uppercase;
+       letter-spacing:.04em; padding-top:2px; }
+  .v { flex:1; }
+  .conf { font-size:.7rem; padding:1px 6px; border-radius:4px; font-weight:700; align-self:flex-start; }
+  .c-hi { background:#e4f2ec; color:var(--accent); } .c-lo { background:#fdecea; color:var(--red); }
+  .c-mid { background:#fff3cd; color:var(--amber); }
+  s { color:var(--muted); }
+  .quote { background:#f6f9fa; border-left:3px solid var(--accent); padding:7px 10px; margin:5px 0;
+           font-size:.88rem; cursor:pointer; border-radius:0 6px 6px 0; }
+  .quote:hover { background:#eaf3f0; }
+  .quote::before { content:"▶ "; color:var(--accent); font-size:.75rem; }
+  .consider { background:#f7f5ff; border:1px solid #e0d8f5; border-radius:7px; padding:9px 11px;
+              font-size:.85rem; margin-top:8px; }
+  .consider b { font-size:.7rem; text-transform:uppercase; color:#6a4fb3; letter-spacing:.05em; }
+  .flag { color:var(--red); font-weight:700; }
+  .empty { color:var(--muted); text-align:center; padding:50px; }
+</style>
+</head>
+<body>
+  <header>
+    <div><h1>🩺 Intake queue</h1>
+      <div class="sub">Notes assemble while the patient is still speaking · auto-refresh 2s</div></div>
+    <div class="sub" id="count"></div>
+  </header>
+  <div class="grid" id="grid"><div class="empty">No intakes yet.</div></div>
+<script>
+const grid=document.getElementById('grid'), count=document.getElementById('count');
+const esc=s=>String(s??'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+function conf(v){ if(v==null) return '';
+  const p=Math.round(v*100), cls=v>=.85?'c-hi':(v>=.6?'c-mid':'c-lo');
+  return `<span class="conf ${cls}">${p}%</span>`; }
+
+function row(k,v,c){ if(!v||(Array.isArray(v)&&!v.length)) return '';
+  return `<div class="row"><div class="k">${k}</div><div class="v">${v}</div>${c??''}</div>`; }
+
+function card(s){
+  const n=s.note||{}, urgent=s.status==='escalated';
+  const corr=(n.corrections||[]).find(c=>c.field==='onset_duration');
+  const dur = corr && corr.old ? `<s>${esc(corr.old)}</s> → <b>${esc(corr.new||n.onset_duration)}</b>`
+                               : esc(n.onset_duration||'');
+  const quotes=(s.turns||[]).map(t=>
+    `<div class="quote" onclick="new Audio('/audio/'+'${t.audio}').play()">"${esc(t.english)}"</div>`).join('');
+  const badge = urgent ? '<span class="badge b-red">⚠ RED FLAG — SEE NOW</span>'
+    : s.status==='booked' ? `<span class="badge b-ok">BOOKED ${esc(s.booking?.slot||'')}</span>`
+    : '<span class="badge b-live">● INTAKE IN PROGRESS</span>';
+  return `<div class="card ${urgent?'urgent':''}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+      ${badge}<span class="sub">${esc(s.phone||'walk-in')} · #${esc(s.id)}</span></div>
+    ${urgent?`<div class="row"><div class="k">Red flags</div><div class="v flag">${(s.red_flags||[]).map(esc).join(' · ')}</div></div>`:''}
+    ${row('Complaint', esc(n.chief_complaint||(s.turns?.length?'…listening':'')), conf(n.confidence?.chief_complaint))}
+    ${row('Duration', dur, conf(n.confidence?.onset_duration))}
+    ${row('Severity', esc(n.severity_words))}
+    ${row('Symptoms', (n.symptoms||[]).map(esc).join(', '))}
+    ${row('Medications', (n.medications_mentioned||[]).map(esc).join(', '))}
+    ${row('Booked with', s.booking?`${esc(s.booking.doctor)} · ${esc(s.booking.specialty)}`:'')}
+    ${quotes?`<div style="margin-top:9px"><div class="k">Patient's own words (click to play)</div>${quotes}</div>`:''}
+    ${(n.areas_to_consider||[]).length?`<div class="consider"><b>Areas to consider · clinician only</b><br>${(n.areas_to_consider).map(esc).join(' · ')}</div>`:''}
+  </div>`;
+}
+
+async function refresh(){
+  try{
+    const list=await (await fetch('/api/sessions')).json();
+    count.textContent=`${list.length} intake${list.length===1?'':'s'} today`;
+    grid.innerHTML = list.length ? list.map(card).join('') : '<div class="empty">No intakes yet.</div>';
+  }catch(e){}
+}
+refresh(); setInterval(refresh,2000);
+</script>
+</body>
+</html>

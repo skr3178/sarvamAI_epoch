@@ -2,6 +2,7 @@
 
 Run: uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form
@@ -24,7 +25,8 @@ def session_new(phone: str = Form(default="")):
 async def turn(sid: str, audio: UploadFile):
     state = agent.load(sid)
     agent.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    suffix = "webm" if "webm" in (audio.content_type or "") else "wav"
+    ctype = (audio.content_type or "") + " " + (audio.filename or "")
+    suffix = next((e for e in ("webm", "mp4", "ogg", "mp3") if e in ctype), "wav")
     fname = f"patient_{sid}_{len(state['turns']) + 1}.{suffix}"
     dest = agent.AUDIO_DIR / fname
     dest.write_bytes(await audio.read())
@@ -39,6 +41,21 @@ async def turn(sid: str, audio: UploadFile):
 @app.get("/api/session/{sid}")
 def session_get(sid: str):
     return agent.load(sid)
+
+
+@app.get("/api/sessions")
+def sessions_all():
+    """Doctor queue: escalations first, then most recent."""
+    out = []
+    for f in agent.DATA_DIR.glob("session_*.json"):
+        try:
+            s = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if s.get("turns"):
+            out.append(s)
+    out.sort(key=lambda s: (s.get("status") != "escalated", -s.get("created", 0)))
+    return out
 
 
 @app.get("/audio/{fname}")

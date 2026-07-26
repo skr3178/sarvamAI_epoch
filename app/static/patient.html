@@ -48,8 +48,12 @@ mic.onclick=async()=>{
   if(busy) return;
   if(!recording){
     await ensureSession();
+    if(!navigator.mediaDevices){ status.textContent='माइक उपलब्ध नहीं — localhost या HTTPS पर खोलिए'; return; }
     const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    mediaRec=new MediaRecorder(stream,{mimeType:'audio/webm'});
+    // Chrome records webm/opus, Safari records mp4/aac. Sarvam accepts both.
+    const type=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/aac']
+      .find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+    mediaRec=type?new MediaRecorder(stream,{mimeType:type}):new MediaRecorder(stream);
     chunks=[]; mediaRec.ondataavailable=e=>chunks.push(e.data);
     mediaRec.onstop=sendTurn;
     mediaRec.start(); recording=true;
@@ -65,7 +69,9 @@ mic.onclick=async()=>{
 async function sendTurn(){
   busy=true; mic.disabled=true; status.textContent='समझ रही हूँ…';
   const fd=new FormData();
-  fd.append('audio', new Blob(chunks,{type:'audio/webm'}), 'turn.webm');
+  const blob=new Blob(chunks,{type:mediaRec.mimeType||'audio/webm'});
+  const ext=(blob.type.includes('mp4')||blob.type.includes('aac'))?'mp4':'webm';
+  fd.append('audio', blob, 'turn.'+ext);
   try{
     const r=await fetch('/api/turn/'+sid,{method:'POST',body:fd});
     const data=await r.json();
