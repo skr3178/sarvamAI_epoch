@@ -1,1 +1,5 @@
 api_key.md
+__pycache__/
+*.pyc
+app/audio/*.wav
+app/data/
