@@ -9,12 +9,26 @@
   * { box-sizing:border-box; margin:0; }
   body { font-family:ui-sans-serif, system-ui, sans-serif; background:#eef2f3; color:var(--ink);
          padding:20px; line-height:1.5; }
-  header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; }
+  header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
+           margin-bottom:14px; flex-wrap:wrap; }
   h1 { font-size:1.15rem; } .sub { color:var(--muted); font-size:.85rem; }
+  .tools { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+  .picker { display:flex; align-items:center; gap:7px; }
+  .picker label { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+  select { font:inherit; font-size:.9rem; padding:5px 9px; border:1px solid var(--line);
+           border-radius:7px; background:#fff; color:var(--ink); cursor:pointer; }
+  select:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .caveat { color:var(--amber); font-size:.78rem; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(370px,1fr)); gap:14px; }
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px;
           box-shadow:0 1px 3px rgba(0,0,0,.05); }
   .card.urgent { border:2px solid var(--red); background:#fff8f7; }
+  .cardtop { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:9px; }
+  .cardtop .meta { margin-left:auto; }
+  .ticket { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.95rem;
+            font-weight:700; letter-spacing:.06em; background:var(--ink); color:#fff;
+            padding:3px 10px; border-radius:6px; }
+  .card.urgent .ticket { background:var(--red); }
   .badge { display:inline-block; padding:2px 9px; border-radius:99px; font-size:.72rem;
            font-weight:700; letter-spacing:.03em; }
   .b-red { background:var(--red); color:#fff; } .b-ok { background:#e4f2ec; color:var(--accent); }
@@ -28,6 +42,8 @@
   .c-hi { background:#e4f2ec; color:var(--accent); } .c-lo { background:#fdecea; color:var(--red); }
   .c-mid { background:#fff3cd; color:var(--amber); }
   s { color:var(--muted); }
+  /* Translated text carries a hint that the English original is one hover away. */
+  .tr { border-bottom:1px dotted #b9c7cd; cursor:help; }
   .quote { background:#f6f9fa; border-left:3px solid var(--accent); padding:7px 10px; margin:5px 0;
            font-size:.88rem; cursor:pointer; border-radius:0 6px 6px 0; }
   .quote:hover { background:#eaf3f0; }
@@ -41,55 +57,107 @@
 </head>
 <body>
   <header>
-    <div><h1>🩺 Intake queue</h1>
-      <div class="sub">Notes assemble while the patient is still speaking · auto-refresh 2s</div></div>
-    <div class="sub" id="count"></div>
+    <div><h1>🩺 <span id="title">Intake queue</span></h1>
+      <div class="sub" id="tagline"></div></div>
+    <div class="tools">
+      <div class="picker">
+        <label for="lang" id="langLabel">Reading language</label>
+        <select id="lang"></select>
+      </div>
+      <div class="sub" id="count"></div>
+      <div class="caveat" id="caveat"></div>
+    </div>
   </header>
   <div class="grid" id="grid"><div class="empty">No intakes yet.</div></div>
 <script>
-const grid=document.getElementById('grid'), count=document.getElementById('count');
-const esc=s=>String(s??'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const grid=document.getElementById('grid'), count=document.getElementById('count'),
+      sel=document.getElementById('lang'), caveat=document.getElementById('caveat');
+const esc=s=>String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+let lang = localStorage.getItem('doctorLang') || 'en-IN';
+let D = {labels:{}, tr:{}, sessions:[], pending:0};
+
+const L = k => D.labels[k] ?? k;                    // fixed screen label
+// Free text: show the translation, keep the English original one hover away. The note on
+// disk is always English — this screen is a reading aid, not a second record.
+function tv(s){
+  const t = D.tr[String(s)];
+  return (t && t !== s) ? `<span class="tr" title="${esc(s)}">${esc(t)}</span>` : esc(s);
+}
+const tlist = (arr, sep=', ') => (arr||[]).map(tv).join(sep);
 
 function conf(v){ if(v==null) return '';
   const p=Math.round(v*100), cls=v>=.85?'c-hi':(v>=.6?'c-mid':'c-lo');
   return `<span class="conf ${cls}">${p}%</span>`; }
 
 function row(k,v,c){ if(!v||(Array.isArray(v)&&!v.length)) return '';
-  return `<div class="row"><div class="k">${k}</div><div class="v">${v}</div>${c??''}</div>`; }
+  return `<div class="row"><div class="k">${esc(k)}</div><div class="v">${v}</div>${c??''}</div>`; }
 
 function card(s){
   const n=s.note||{}, urgent=s.status==='escalated';
   const corr=(n.corrections||[]).find(c=>c.field==='onset_duration');
-  const dur = corr && corr.old ? `<s>${esc(corr.old)}</s> → <b>${esc(corr.new||n.onset_duration)}</b>`
-                               : esc(n.onset_duration||'');
+  const dur = corr && corr.old ? `<s>${tv(corr.old)}</s> → <b>${tv(corr.new||n.onset_duration)}</b>`
+                               : tv(n.onset_duration||'');
   const quotes=(s.turns||[]).map(t=>
-    `<div class="quote" onclick="new Audio('/audio/'+'${t.audio}').play()">"${esc(t.english)}"</div>`).join('');
-  const badge = urgent ? '<span class="badge b-red">⚠ RED FLAG — SEE NOW</span>'
-    : s.status==='booked' ? `<span class="badge b-ok">BOOKED ${esc(s.booking?.slot||'')}</span>`
-    : '<span class="badge b-live">● INTAKE IN PROGRESS</span>';
+    `<div class="quote" onclick="new Audio('/audio/'+'${t.audio}').play()">"${tv(t.english)}"</div>`).join('');
+  const badge = urgent ? `<span class="badge b-red">⚠ ${esc(L('red_flag_badge'))}</span>`
+    : s.status==='booked' ? `<span class="badge b-ok">${esc(L('booked_badge'))} ${esc(s.booking?.slot||'')}</span>`
+    : `<span class="badge b-live">● ${esc(L('in_progress_badge'))}</span>`;
+  const bookedWith = s.booking
+    ? `${esc(s.booking.doctor)} · ${tv(s.booking.specialty)}` : '';
   return `<div class="card ${urgent?'urgent':''}">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
-      ${badge}<span class="sub">${esc(s.phone||'walk-in')} · #${esc(s.id)}</span></div>
-    ${urgent?`<div class="row"><div class="k">Red flags</div><div class="v flag">${(s.red_flags||[]).map(esc).join(' · ')}</div></div>`:''}
-    ${row('Complaint', esc(n.chief_complaint||(s.turns?.length?'…listening':'')), conf(n.confidence?.chief_complaint))}
-    ${row('Duration', dur, conf(n.confidence?.onset_duration))}
-    ${row('Severity', esc(n.severity_words))}
-    ${row('Symptoms', (n.symptoms||[]).map(esc).join(', '))}
-    ${row('Medications', (n.medications_mentioned||[]).map(esc).join(', '))}
-    ${row('Booked with', s.booking?`${esc(s.booking.doctor)} · ${esc(s.booking.specialty)}`:'')}
-    ${quotes?`<div style="margin-top:9px"><div class="k">Patient's own words (click to play)</div>${quotes}</div>`:''}
-    ${(n.areas_to_consider||[]).length?`<div class="consider"><b>Areas to consider · clinician only</b><br>${(n.areas_to_consider).map(esc).join(' · ')}</div>`:''}
+    <div class="cardtop">
+      <span class="ticket" title="${esc(L('ticket'))}">${esc(s.ticket||'#'+s.id)}</span>
+      ${badge}
+      <span class="sub meta">${esc(s.phone||L('walk_in'))}</span></div>
+    ${urgent?`<div class="row"><div class="k">${esc(L('red_flags'))}</div><div class="v flag">${tlist(s.red_flags,' · ')}</div></div>`:''}
+    ${row(L('complaint'), n.chief_complaint?tv(n.chief_complaint):(s.turns?.length?esc(L('listening')):''), conf(n.confidence?.chief_complaint))}
+    ${row(L('duration'), dur, conf(n.confidence?.onset_duration))}
+    ${row(L('severity'), tv(n.severity_words||''))}
+    ${row(L('symptoms'), tlist(n.symptoms))}
+    ${row(L('medications'), tlist(n.medications_mentioned))}
+    ${row(L('booked_with'), bookedWith)}
+    ${quotes?`<div style="margin-top:9px"><div class="k">${esc(L('own_words'))}</div>${quotes}</div>`:''}
+    ${(n.areas_to_consider||[]).length?`<div class="consider"><b>${esc(L('consider'))}</b><br>${tlist(n.areas_to_consider,' · ')}</div>`:''}
   </div>`;
+}
+
+function paint(){
+  document.getElementById('title').textContent=L('title');
+  document.getElementById('tagline').textContent=L('tagline');
+  document.getElementById('langLabel').textContent=L('language');
+  const list=D.sessions;
+  count.textContent=`${list.length} ${L('intakes_today')}`;
+  caveat.textContent = lang==='en-IN' ? ''
+    : (D.pending ? `${L('caveat')} · ${L('translating')} ${D.pending}…` : L('caveat'));
+  grid.innerHTML = list.length ? list.map(card).join('')
+                               : `<div class="empty">${esc(L('empty'))}</div>`;
+  document.documentElement.lang = lang.split('-')[0];
 }
 
 async function refresh(){
   try{
-    const list=await (await fetch('/api/sessions')).json();
-    count.textContent=`${list.length} intake${list.length===1?'':'s'} today`;
-    grid.innerHTML = list.length ? list.map(card).join('') : '<div class="empty">No intakes yet.</div>';
+    D = await (await fetch('/api/sessions?lang='+encodeURIComponent(lang))).json();
+    paint();
   }catch(e){}
 }
-refresh(); setInterval(refresh,2000);
+
+async function loadLanguages(){
+  try{
+    const info=await (await fetch('/api/languages')).json();
+    // English first: it is the language the note is actually written in.
+    const langs=[...info.languages].sort((a,b)=>(a.code==='en-IN'?-1:b.code==='en-IN'?1:0));
+    sel.innerHTML=langs.map(l=>`<option value="${esc(l.code)}">${esc(
+      l.native===l.name ? l.name : l.native+' · '+l.name)}</option>`).join('');
+    if(!langs.some(l=>l.code===lang)) lang='en-IN';
+    sel.value=lang;
+  }catch(e){ sel.innerHTML='<option value="en-IN">English</option>'; }
+}
+
+sel.onchange=()=>{ lang=sel.value; localStorage.setItem('doctorLang',lang); refresh(); };
+
+loadLanguages().then(refresh);
+setInterval(refresh,2000);
 </script>
 </body>
 </html>
