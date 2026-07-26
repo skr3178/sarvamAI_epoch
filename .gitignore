@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 app/audio/*.wav
 app/data/
+eval/fixtures/
+eval/results/
