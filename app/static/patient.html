@@ -8,16 +8,20 @@
   :root { --accent:#0e7a5f; --red:#c0392b; }
   * { box-sizing:border-box; margin:0; }
   body { font-family:system-ui, sans-serif; background:#f4f6f5; min-height:100vh;
-         display:flex; flex-direction:column; align-items:center; padding:24px; gap:20px; }
-  h1 { font-size:1.3rem; color:#233; margin-top:8px; }
+         display:flex; flex-direction:column; align-items:center; padding:20px; gap:18px; }
+  #langbar { display:flex; align-items:center; gap:9px; align-self:flex-end; }
+  #langbar label { color:#6b7f88; font-size:.82rem; }
+  #lang { font-family:inherit; font-size:.95rem; padding:7px 10px; border-radius:8px;
+          border:1px solid #cfdadd; background:#fff; cursor:pointer; }
+  h1 { font-size:1.28rem; color:#233; text-align:center; margin-top:4px; }
   #mic { width:150px; height:150px; border-radius:50%; border:none; background:var(--accent);
-         color:#fff; font-size:1.05rem; cursor:pointer; box-shadow:0 6px 20px rgba(14,122,95,.35);
-         transition:transform .1s; }
+         color:#fff; font-size:1.02rem; cursor:pointer; box-shadow:0 6px 20px rgba(14,122,95,.35);
+         transition:transform .1s; padding:10px; line-height:1.3; }
   #mic:active { transform:scale(.96); }
   #mic.rec { background:var(--red); animation:pulse 1.2s infinite; }
   #mic:disabled { background:#9ab; cursor:wait; }
   @keyframes pulse { 50% { box-shadow:0 0 0 18px rgba(192,57,43,.15);} }
-  #status { color:#456; min-height:1.4em; font-size:1.05rem; text-align:center; }
+  #status { color:#456; min-height:1.4em; font-size:1.02rem; text-align:center; }
   #transcript { width:min(560px,100%); display:flex; flex-direction:column; gap:10px; }
   .bubble { padding:10px 14px; border-radius:14px; max-width:85%; line-height:1.45; }
   .patient { background:#dcece7; align-self:flex-end; }
@@ -27,29 +31,69 @@
 </style>
 </head>
 <body>
-  <h1>🏥 अपनी तकलीफ़ अपनी भाषा में बताइए</h1>
-  <button id="mic">बोलने के लिए<br>दबाइए</button>
-  <div id="status">बटन दबाकर बोलिए, फिर दोबारा दबाकर रोकिए</div>
+  <div id="langbar"><label for="lang" id="langLabel">Language</label>
+    <select id="lang"></select></div>
+  <h1 id="title">🏥</h1>
+  <button id="mic"></button>
+  <div id="status"></div>
   <div id="transcript"></div>
 <script>
 let sid=null, mediaRec=null, chunks=[], recording=false, busy=false;
+let LANG='hi-IN', STRINGS={}, DEFAULT='hi-IN';
 const mic=document.getElementById('mic'), status=document.getElementById('status'),
-      log=document.getElementById('transcript');
+      log=document.getElementById('transcript'), sel=document.getElementById('lang'),
+      title=document.getElementById('title');
+
+const t=k=>(STRINGS[LANG]||{})[k]||k;
+
+function paint(){
+  document.documentElement.lang=LANG.split('-')[0];
+  title.textContent='🏥 '+t('ui_title');
+  document.title=t('ui_title');
+  document.getElementById('langLabel').textContent=t('ui_language');
+  mic.innerHTML=recording?t('ui_press_stop'):t('ui_press_speak');
+  if(!log.children.length) status.textContent=t('ui_hint');
+}
 
 function bubble(text, cls){ const d=document.createElement('div');
   d.className='bubble '+cls; d.textContent=text; log.appendChild(d);
   d.scrollIntoView({behavior:'smooth'}); return d; }
 
+async function boot(){
+  const d=await (await fetch('/api/languages')).json();
+  STRINGS=d.strings; DEFAULT=d.default;
+  // Remember the patient's choice: a returning patient should not re-pick every visit.
+  LANG=localStorage.getItem('kioskLang')||d.default;
+  if(!STRINGS[LANG]) LANG=d.default;
+  sel.innerHTML=d.languages.map(l=>
+    `<option value="${l.code}"${l.code===LANG?' selected':''}>${l.native} · ${l.name}</option>`).join('');
+  paint();
+}
+
+// Changing language starts a fresh intake: the agent cannot switch the voice of a
+// conversation already under way without the note and the audio disagreeing.
+sel.onchange=()=>{
+  LANG=sel.value; localStorage.setItem('kioskLang',LANG);
+  sid=null; log.innerHTML=''; mic.style.display='';
+  paint(); status.textContent=t('ui_hint');
+};
+
 async function ensureSession(){ if(sid) return;
-  const r=await fetch('/api/session/new',{method:'POST',body:new FormData()});
+  const fd=new FormData(); fd.append('language',LANG);
+  const r=await fetch('/api/session/new',{method:'POST',body:fd});
   sid=(await r.json()).id; }
 
 mic.onclick=async()=>{
   if(busy) return;
   if(!recording){
+    if(!navigator.mediaDevices){ status.textContent=t('ui_mic_blocked'); return; }
     await ensureSession();
-    if(!navigator.mediaDevices){ status.textContent='माइक उपलब्ध नहीं — localhost या HTTPS पर खोलिए'; return; }
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    let stream;
+    try{
+      // noiseSuppression/AGC matter: intake happens in a loud waiting room.
+      stream=await navigator.mediaDevices.getUserMedia({audio:{
+        echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}});
+    }catch(e){ status.textContent=t('ui_mic_blocked'); return; }
     // Chrome records webm/opus, Safari records mp4/aac. Sarvam accepts both.
     const type=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/aac']
       .find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
@@ -57,17 +101,17 @@ mic.onclick=async()=>{
     chunks=[]; mediaRec.ondataavailable=e=>chunks.push(e.data);
     mediaRec.onstop=sendTurn;
     mediaRec.start(); recording=true;
-    mic.classList.add('rec'); mic.innerHTML='रोकने के लिए<br>दबाइए';
-    status.textContent='सुन रही हूँ…';
+    mic.classList.add('rec'); mic.innerHTML=t('ui_press_stop');
+    status.textContent=t('ui_listening');
+    sel.disabled=true;
   } else {
-    mediaRec.stop(); mediaRec.stream.getTracks().forEach(t=>t.stop());
-    recording=false; mic.classList.remove('rec');
-    mic.innerHTML='बोलने के लिए<br>दबाइए';
+    mediaRec.stop(); mediaRec.stream.getTracks().forEach(x=>x.stop());
+    recording=false; mic.classList.remove('rec'); mic.innerHTML=t('ui_press_speak');
   }
 };
 
 async function sendTurn(){
-  busy=true; mic.disabled=true; status.textContent='समझ रही हूँ…';
+  busy=true; mic.disabled=true; status.textContent=t('ui_thinking');
   const fd=new FormData();
   const blob=new Blob(chunks,{type:mediaRec.mimeType||'audio/webm'});
   const ext=(blob.type.includes('mp4')||blob.type.includes('aac'))?'mp4':'webm';
@@ -78,15 +122,17 @@ async function sendTurn(){
     const turns=data.session.turns;
     if(turns.length) bubble(turns[turns.length-1].english,'patient');
     const esc=data.session.status==='escalated';
-    bubble(data.reply_text, esc?'bubble escalate':(data.done?'booked':'agent'));
+    bubble(data.reply_text, esc?'escalate':(data.done?'booked':'agent'));
     if(data.reply_audio){ const a=new Audio(data.reply_audio); await a.play().catch(()=>{}); }
     if(data.done){
-      status.textContent = esc ? '⚠ स्टाफ को बुलाया गया है' : '✓ appointment book हो गया';
+      status.textContent = esc ? '⚠ '+t('ui_escalated') : '✓ '+t('ui_booked');
       mic.style.display='none';
-    } else { status.textContent='जवाब देने के लिए बटन दबाइए'; }
-  }catch(e){ status.textContent='दिक्कत हुई — फिर से कोशिश कीजिए'; }
-  busy=false; mic.disabled=false;
+    } else { status.textContent=t('ui_your_turn'); }
+  }catch(e){ status.textContent=t('ui_error'); }
+  busy=false; mic.disabled=false; sel.disabled=false;
 }
+
+boot();
 </script>
 </body>
 </html>

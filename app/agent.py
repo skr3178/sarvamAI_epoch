@@ -14,7 +14,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import redflags, sarvam_client as sv
+from . import languages as L, redflags, sarvam_client as sv
 from .pipeline import DOCTOR_ROSTER, FORBIDDEN_PATIENT_FACING, book
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -39,31 +39,47 @@ follow_up_question: the single most useful next question in English, non-leading
 
 VALID_CATEGORIES = {c for d in DOCTOR_ROSTER for c in d["categories"]}
 
-# Deterministic question ladder. Pre-translated so a follow-up costs no model call.
+# Deterministic question ladder: (note field, string key). The text for each key is
+# pre-translated into every supported language, so a follow-up costs no model call.
 QUESTION_LADDER = [
-    ("chief_complaint", "What is troubling you the most right now?",
-     "अभी आपको सबसे ज़्यादा क्या तकलीफ़ हो रही है?"),
-    ("onset_duration", "Since when has this been going on?",
-     "यह तकलीफ़ कब से है?"),
-    ("severity_words", "How bad is it — is it stopping you from doing your daily work?",
-     "तकलीफ़ कितनी है — क्या इससे आपका रोज़ का काम रुक रहा है?"),
-    ("associated", "Is there anything else along with it?",
-     "इसके साथ और कुछ भी हो रहा है — बुखार, उल्टी, या कहीं और दर्द?"),
+    ("chief_complaint", "q_chief_complaint"),
+    ("onset_duration", "q_onset_duration"),
+    ("severity_words", "q_severity_words"),
+    ("associated", "q_associated"),
 ]
-
-ESCALATION_HI = "यह ज़रूरी है — मैं अभी स्टाफ़ को बुला रही हूँ। कृपया वहीं रहिए।"
-GARBLED_HI = "माफ़ कीजिए, आवाज़ साफ़ नहीं आई। कृपया फिर से बताइए।"
 
 
 def _session_file(sid: str) -> Path:
     return DATA_DIR / f"session_{sid}.json"
 
 
-def new_session(phone: str | None = None) -> dict:
+# A session id is a uuid stub — fine for a URL, useless for calling someone across a
+# waiting room. The ticket is the number the patient is given and the doctor calls out,
+# so it is short, ordered, and restarts each morning.
+TICKET_FILE = DATA_DIR / "ticket_counter.json"
+_ticket_lock = threading.Lock()
+
+
+def next_ticket() -> str:
+    """Next queue number for today, e.g. T-007. Restarts at 1 on a new date."""
+    today = time.strftime("%Y-%m-%d")
+    with _ticket_lock:
+        try:
+            counter = json.loads(TICKET_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            counter = {}
+        n = counter.get("n", 0) + 1 if counter.get("date") == today else 1
+        DATA_DIR.mkdir(exist_ok=True)
+        TICKET_FILE.write_text(json.dumps({"date": today, "n": n}))
+    return f"T-{n:03d}"
+
+
+def new_session(phone: str | None = None, language: str = L.DEFAULT) -> dict:
     sid = uuid.uuid4().hex[:8]
     state = {
-        "id": sid, "phone": phone, "created": time.time(), "turns": [],
-        "note": {}, "status": "open", "booking": None, "red_flags": [],
+        "id": sid, "ticket": next_ticket(), "phone": phone, "created": time.time(),
+        "language": language if language in L.SUPPORTED else L.DEFAULT,
+        "turns": [], "note": {}, "status": "open", "booking": None, "red_flags": [],
         "asked": [], "structuring": False,
     }
     _locks[sid] = threading.Lock()
@@ -80,10 +96,10 @@ def load(sid: str) -> dict:
     return json.loads(_session_file(sid).read_text())
 
 
-def safety_filter(text: str) -> str:
+def safety_filter(text: str, lang: str = L.DEFAULT) -> str:
     """Patient-facing text may never contain diagnosis/advice language (code-level boundary)."""
     if FORBIDDEN_PATIENT_FACING.search(text):
-        return "आपकी बात नोट कर ली गई है। डॉक्टर आपसे जल्द मिलेंगे।"
+        return L.t(lang, "safety_fallback")
     return text
 
 
@@ -144,12 +160,12 @@ def _covered(state: dict) -> set[str]:
 
 
 def _next_question(state: dict) -> tuple[str, str] | None:
-    """(english, hindi) of the next question, or None if we have enough to book."""
-    note = state["note"]
+    """(english, spoken) of the next question, or None if we have enough to book."""
     asked = state["asked"]
     covered = _covered(state)
     proposed = state.get("proposed_question")
-    for field, english, hindi in QUESTION_LADDER:
+    lang = state.get("language", L.DEFAULT)
+    for field, key in QUESTION_LADDER:
         if field in asked:
             continue
         if field == "associated":
@@ -157,31 +173,44 @@ def _next_question(state: dict) -> tuple[str, str] | None:
         if field not in covered:
             # Prefer the model's own question once structuring has produced one.
             if proposed and len(state["turns"]) > 1:
-                return proposed, _to_hindi(proposed)
-            return english, hindi
+                return proposed, _localize(proposed, lang)
+            return L.STRINGS[key], L.t(lang, key)
     if len(state["turns"]) < 2 and "associated" not in asked:
-        field, english, hindi = QUESTION_LADDER[-1]
+        _, key = QUESTION_LADDER[-1]
         if proposed:
-            return proposed, _to_hindi(proposed)
-        return english, hindi
+            return proposed, _localize(proposed, lang)
+        return L.STRINGS[key], L.t(lang, key)
     return None
 
 
-def _to_hindi(question: str) -> str:
-    for _, english, hindi in QUESTION_LADDER:
-        if question.strip() == english:
-            return hindi
+_localized: dict[tuple[str, str], str] = {}
+
+
+def _localize(question: str, lang: str) -> str:
+    """Speak a model-proposed question in the patient's language.
+
+    Ladder questions never reach the network. Anything else is translated once and memoized,
+    because the same follow-up recurs across patients.
+    """
+    for _, key in QUESTION_LADDER:
+        if question.strip() == L.STRINGS[key]:
+            return L.t(lang, key)
+    if lang == "en-IN":
+        return question
+    cached = _localized.get((question, lang))
+    if cached:
+        return cached
     try:
-        return sv.chat_json([{"role": "user", "content":
-            "Translate to natural spoken Hindi (Devanagari). JSON only: "
-            '{"hi":"..."}\nText: ' + question}])["hi"]
+        text = L._translate(question, lang)
     except Exception:
-        return "थोड़ा और बताइए।"
+        text = L.t(lang, "q_associated")  # never leave the patient without a prompt
+    _localized[(question, lang)] = text
+    return text
 
 
 def _field_for(question: str) -> str:
-    for field, english, _ in QUESTION_LADDER:
-        if question.strip() == english:
+    for field, key in QUESTION_LADDER:
+        if question.strip() == L.STRINGS[key]:
             return field
     return "model_proposed"
 
@@ -193,7 +222,7 @@ def process_turn(state: dict, audio_path: str) -> dict:
     lang = stt.get("language_code") or "hi-IN"
 
     if not english:
-        return _reply(state, GARBLED_HI, done=False)
+        return _reply(state, L.t(state.get("language", L.DEFAULT), "garbled"), done=False)
 
     state["turns"].append({
         "n": len(state["turns"]) + 1, "audio": Path(audio_path).name,
@@ -208,7 +237,7 @@ def process_turn(state: dict, audio_path: str) -> dict:
         state["booking"] = book("urgent", urgent=True)
         save(state)
         _kick_off_structuring(load(state["id"]))  # note still assembles for the doctor
-        return _reply(state, ESCALATION_HI, done=True)
+        return _reply(state, L.t(state.get("language", L.DEFAULT), "escalation"), done=True)
 
     _kick_off_structuring(state)
 
@@ -217,10 +246,10 @@ def process_turn(state: dict, audio_path: str) -> dict:
     question = _next_question(state) if len(state["turns"]) < MAX_PATIENT_TURNS else None
 
     if question:
-        english_q, hindi_q = question
+        english_q, spoken_q = question
         state["asked"].append(_field_for(english_q))
         save(state)
-        return _reply(state, safety_filter(hindi_q), done=False)
+        return _reply(state, safety_filter(spoken_q, state.get("language", L.DEFAULT)), done=False)
 
     # Booking: use the category already structured from earlier turns so the patient hears
     # the confirmation immediately. Only block if nothing has been structured at all yet.
@@ -236,14 +265,15 @@ def process_turn(state: dict, audio_path: str) -> dict:
     state["booking"] = booking
     state["status"] = "booked"
     save(state)
+    lang = state.get("language", L.DEFAULT)
     reply = safety_filter(
-        f"आपकी बात नोट हो गई है। {booking['doctor']} से {booking['slot']} बजे "
-        "अपॉइंटमेंट बुक हो गया है। जल्दी स्वस्थ होइए।")
+        L.t(lang, "booked", doctor=booking["doctor"], slot=booking["slot"]), lang)
     return _reply(state, reply, done=True)
 
 
 def _reply(state: dict, reply_text: str, done: bool) -> dict:
-    audio = sv.tts(reply_text, language_code="hi-IN")
+    audio = sv.tts(reply_text, language_code=state.get("language", L.DEFAULT),
+                   speaker=L.SPEAKER)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     fname = f"reply_{state['id']}_{len(state['turns'])}_{int(time.time())}.wav"
     (AUDIO_DIR / fname).write_bytes(audio)

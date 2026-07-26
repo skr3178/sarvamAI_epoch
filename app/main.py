@@ -9,16 +9,25 @@ from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent
+from . import agent, doctor, languages as L
 
 app = FastAPI(title="Clinic Voice Intake")
 STATIC = Path(__file__).resolve().parent / "static"
 
 
+@app.get("/api/languages")
+def languages():
+    """Languages the agent can actually speak, with their localized UI strings."""
+    return {
+        "default": L.DEFAULT,
+        "languages": [{"code": c, "name": n, "native": e} for c, n, e in L.LANGUAGES],
+        "strings": {c: L.strings(c) for c, _, _ in L.LANGUAGES},
+    }
+
+
 @app.post("/api/session/new")
-def session_new(phone: str = Form(default="")):
-    state = agent.new_session(phone=phone or None)
-    return state
+def session_new(phone: str = Form(default=""), language: str = Form(default=L.DEFAULT)):
+    return agent.new_session(phone=phone or None, language=language)
 
 
 @app.post("/api/turn/{sid}")
@@ -44,18 +53,9 @@ def session_get(sid: str):
 
 
 @app.get("/api/sessions")
-def sessions_all():
-    """Doctor queue: escalations first, then most recent."""
-    out = []
-    for f in agent.DATA_DIR.glob("session_*.json"):
-        try:
-            s = json.loads(f.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if s.get("turns"):
-            out.append(s)
-    out.sort(key=lambda s: (s.get("status") != "escalated", -s.get("created", 0)))
-    return out
+def sessions_all(lang: str = "en-IN"):
+    """Doctor queue, read in `lang`. The notes themselves stay English on disk."""
+    return doctor.queue(lang)
 
 
 @app.get("/audio/{fname}")
