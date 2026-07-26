@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>क्लिनिक रिसेप्शन</title>
+<style>
+  :root { --accent:#0e7a5f; --red:#c0392b; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui, sans-serif; background:#f4f6f5; min-height:100vh;
+         display:flex; flex-direction:column; align-items:center; padding:24px; gap:20px; }
+  h1 { font-size:1.3rem; color:#233; margin-top:8px; }
+  #mic { width:150px; height:150px; border-radius:50%; border:none; background:var(--accent);
+         color:#fff; font-size:1.05rem; cursor:pointer; box-shadow:0 6px 20px rgba(14,122,95,.35);
+         transition:transform .1s; }
+  #mic:active { transform:scale(.96); }
+  #mic.rec { background:var(--red); animation:pulse 1.2s infinite; }
+  #mic:disabled { background:#9ab; cursor:wait; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 18px rgba(192,57,43,.15);} }
+  #status { color:#456; min-height:1.4em; font-size:1.05rem; text-align:center; }
+  #transcript { width:min(560px,100%); display:flex; flex-direction:column; gap:10px; }
+  .bubble { padding:10px 14px; border-radius:14px; max-width:85%; line-height:1.45; }
+  .patient { background:#dcece7; align-self:flex-end; }
+  .agent { background:#fff; border:1px solid #dde; align-self:flex-start; }
+  .escalate { background:#fdecea; border:1px solid var(--red); color:var(--red); font-weight:600; }
+  .booked { background:#e8f6ef; border:1px solid var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+  <h1>🏥 अपनी तकलीफ़ अपनी भाषा में बताइए</h1>
+  <button id="mic">बोलने के लिए<br>दबाइए</button>
+  <div id="status">बटन दबाकर बोलिए, फिर दोबारा दबाकर रोकिए</div>
+  <div id="transcript"></div>
+<script>
+let sid=null, mediaRec=null, chunks=[], recording=false, busy=false;
+const mic=document.getElementById('mic'), status=document.getElementById('status'),
+      log=document.getElementById('transcript');
+
+function bubble(text, cls){ const d=document.createElement('div');
+  d.className='bubble '+cls; d.textContent=text; log.appendChild(d);
+  d.scrollIntoView({behavior:'smooth'}); return d; }
+
+async function ensureSession(){ if(sid) return;
+  const r=await fetch('/api/session/new',{method:'POST',body:new FormData()});
+  sid=(await r.json()).id; }
+
+mic.onclick=async()=>{
+  if(busy) return;
+  if(!recording){
+    await ensureSession();
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    mediaRec=new MediaRecorder(stream,{mimeType:'audio/webm'});
+    chunks=[]; mediaRec.ondataavailable=e=>chunks.push(e.data);
+    mediaRec.onstop=sendTurn;
+    mediaRec.start(); recording=true;
+    mic.classList.add('rec'); mic.innerHTML='रोकने के लिए<br>दबाइए';
+    status.textContent='सुन रही हूँ…';
+  } else {
+    mediaRec.stop(); mediaRec.stream.getTracks().forEach(t=>t.stop());
+    recording=false; mic.classList.remove('rec');
+    mic.innerHTML='बोलने के लिए<br>दबाइए';
+  }
+};
+
+async function sendTurn(){
+  busy=true; mic.disabled=true; status.textContent='समझ रही हूँ…';
+  const fd=new FormData();
+  fd.append('audio', new Blob(chunks,{type:'audio/webm'}), 'turn.webm');
+  try{
+    const r=await fetch('/api/turn/'+sid,{method:'POST',body:fd});
+    const data=await r.json();
+    const turns=data.session.turns;
+    if(turns.length) bubble(turns[turns.length-1].english,'patient');
+    const esc=data.session.status==='escalated';
+    bubble(data.reply_text, esc?'bubble escalate':(data.done?'booked':'agent'));
+    if(data.reply_audio){ const a=new Audio(data.reply_audio); await a.play().catch(()=>{}); }
+    if(data.done){
+      status.textContent = esc ? '⚠ स्टाफ को बुलाया गया है' : '✓ appointment book हो गया';
+      mic.style.display='none';
+    } else { status.textContent='जवाब देने के लिए बटन दबाइए'; }
+  }catch(e){ status.textContent='दिक्कत हुई — फिर से कोशिश कीजिए'; }
+  busy=false; mic.disabled=false;
+}
+</script>
+</body>
+</html>

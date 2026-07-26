@@ -69,7 +69,12 @@ def tts(text: str, language_code: str = "hi-IN", speaker: str = "anushka") -> by
     return base64.b64decode(r.json()["audios"][0])
 
 
-def chat(messages: list, model: str = "sarvam-30b", max_tokens: int = 4000) -> str:
+# Starter tier caps total tokens (reasoning + content) at 4096 per call, so prompts are
+# kept small and the turn is split into two focused calls rather than one large one.
+MAX_TOKENS = 4096
+
+
+def chat(messages: list, model: str = "sarvam-30b", max_tokens: int = MAX_TOKENS) -> str:
     r = requests.post(
         f"{BASE}/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"},
@@ -88,9 +93,18 @@ def chat(messages: list, model: str = "sarvam-30b", max_tokens: int = 4000) -> s
     return content
 
 
-def chat_json(messages: list, **kw) -> dict:
-    """Chat call whose reply must parse as a JSON object; strips code fences."""
-    text = chat(messages, **kw)
+def chat_json(messages: list, model: str = "sarvam-105b", **kw) -> dict:
+    """Chat call whose reply must parse as a JSON object; strips code fences.
+
+    Defaults to 105b: on structuring prompts 30b spends the whole 4096-token budget
+    reasoning and returns no content. Falls back to 30b with a '{' prefill, which
+    shortens its reasoning enough to finish.
+    """
+    try:
+        text = chat(messages, model=model, **kw)
+    except (RuntimeError, requests.HTTPError):
+        text = "{" + chat(messages + [{"role": "assistant", "content": "{"}],
+                          model="sarvam-30b", **kw)
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
         raise ValueError(f"no JSON object in model reply: {text[:200]}")
