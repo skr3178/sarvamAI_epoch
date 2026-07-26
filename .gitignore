@@ -5,3 +5,4 @@ app/audio/*.wav
 app/data/
 eval/fixtures/
 eval/results/
+voice_eval/tau2-bench/
